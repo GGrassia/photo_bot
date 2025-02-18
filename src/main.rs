@@ -1,11 +1,9 @@
-mod weather;
+mod commands;
 
-use teloxide::{
-    prelude::*,
-    types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup},
-    utils::command::BotCommands,
-};
-use weather::{forecast_callback_handler, search_handler};
+use commands::base::BotCommand;
+use commands::get_all_commands;
+use teloxide::{ dispatching::dialogue::GetChatId, prelude::*, types::Message};
+
 
 #[tokio::main]
 async fn main() {
@@ -14,42 +12,25 @@ async fn main() {
 
     let bot = Bot::from_env();
 
-    let handler = Update::filter_message().branch(
+    let handler = Update::filter_message()
+    .branch(
         dptree::entry()
         .filter_command::<String>()
         .endpoint(|bot: Bot, msg: Message, query: String| async move {
-            search_handler(bot, msg, &query).await
+            let command = query.trim_start_matches('/').to_lowercase();
+            let commands = get_all_commands();
+
+            if let Some(cmd) = 
+            commands.iter().find(|c| c.name() == command)
+            {
+                cmd.execute(bot, msg).await?;
+            } else {
+                bot.send_message(msg.chat_id(), "Command not found, sorry!");
+            }
+
+            respond(())
         }),
-    )
-    .branch(Update::filter_callback_queSry().endpoint(forecast_callback_handler));
+    );
+    .branch(Update::filter_callback_query().endpoint(forecast_callback_handler));
 
-    //Command::repl(bot, answer).await;
 }
-
-
-
-
-
-#[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "Available Commands:")]
-enum Command {
-    #[command(description = "Display help message.")]
-    Help,
-    #[command(description = "Say hello!")]
-    Start,
-}
-
-async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
-    match cmd {
-        Command::Help => {
-            bot.send_message(msg.chat.id, Command::descriptions().to_string())
-                .await?
-        }
-        Command::Start => {
-            bot.send_message(msg.chat.id, "Hello! I'm Giulio's PhotoBot!")
-                .await?
-        }
-    };
-    Ok(())
-}
-
