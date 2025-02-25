@@ -1,36 +1,37 @@
 mod commands;
+mod base;
 
-use commands::base::BotCommand;
-use commands::get_all_commands;
-use teloxide::{ dispatching::dialogue::GetChatId, prelude::*, types::Message};
-
+use dotenv::dotenv;
+use base::Command;
+use commands::{hello, help, weather};
+use teloxide::prelude::*;
 
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
     log::info!("Starting the photo_bot");
 
+    dotenv().ok();
+
     let bot = Bot::from_env();
 
-    let handler = Update::filter_message()
-    .branch(
-        dptree::entry()
-        .filter_command::<String>()
-        .endpoint(|bot: Bot, msg: Message, query: String| async move {
-            let command = query.trim_start_matches('/').to_lowercase();
-            let commands = get_all_commands();
+    let command_handler = Update::filter_message()
+        .filter_command::<Command>()
+        .branch(dptree::case![Command::Hello].endpoint(hello::handle))
+        .branch(dptree::case![Command::Help].endpoint(help::handle))
+        .branch(dptree::case![Command::Weather(query)].endpoint(weather::handle));
 
-            if let Some(cmd) = 
-            commands.iter().find(|c| c.name() == command)
-            {
-                cmd.execute(bot, msg).await?;
-            } else {
-                bot.send_message(msg.chat_id(), "Command not found, sorry!");
-            }
+    let callback_handler = Update::filter_callback_query()
+        .endpoint(weather::handle_callback);
 
-            respond(())
-        }),
-    );
-    .branch(Update::filter_callback_query().endpoint(forecast_callback_handler));
+    let handler = dptree::entry()
+        .branch(command_handler)
+        .branch(callback_handler);
+
+    Dispatcher::builder(bot, handler)
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
 
 }
