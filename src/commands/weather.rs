@@ -1,8 +1,13 @@
+use crate::weather_data_model::weather_data::*;
 use teloxide::{prelude::*, types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup}};
 use reqwest;
 use serde::Deserialize;
+use serde_json;
 use std::env;
 use once_cell::sync::Lazy;
+use crate::base::{to_error, State};
+use crate::{base, MyDialogue};
+use crate::HandlerResult;
 
 static API_KEY: Lazy<String> = Lazy::new(|| {
     env::var("METEOSOURCE_API_KEY")
@@ -11,20 +16,9 @@ static API_KEY: Lazy<String> = Lazy::new(|| {
 
 #[derive(Deserialize)]
 struct Location {
-    #[serde(rename = "name")]
-    id: String,
-    #[serde(rename = "place_id")]
     name: String,
-    #[serde(rename = "country")]
+    place_id: String,
     country: String,
-}
-
-#[derive(Deserialize)]
-struct Forecast {
-    #[serde(rename = "summary")]
-    forecast: String,
-    #[serde(rename = "cloud_cover")]
-    clouds: u32,
 }
 
 async fn search_place(query: &str) -> Result<Vec<Location>, reqwest::Error> {
@@ -35,20 +29,22 @@ async fn search_place(query: &str) -> Result<Vec<Location>, reqwest::Error> {
     Ok(places)
 }
 
-async fn get_forecast(place: &str) -> Result<Forecast, reqwest::Error> {
+async fn get_forecast(place: &str) ->  Result<WeatherForecast, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("https://www.meteosource.com/api/v1/free/point?place_id={}&sections=all&timezone=UTC&language=en&units=metric&key={}",
                       place, API_KEY.as_str());
     let resp = reqwest::get(&url).await?;
-    let forecast: Forecast = resp.json().await?;
+    let text = resp.text().await?;
+    log::info!("Raw Response: {}", text);
+    let forecast: WeatherForecast = serde_json::from_str(&text)?;
     Ok(forecast)
 }
 
-pub async fn handle(bot: Bot, msg: Message, query: String) -> ResponseResult<()> {
+pub async fn handle(bot: Bot, dialogue: MyDialogue, msg: Message, query: String) -> HandlerResult {
     if query.is_empty() {
-        bot.send_message(
+        let _ = base::to_error(bot.send_message(
             msg.chat.id,
             "Please provide a location. Example: /weather London"
-        ).await?;
+        ).await)?;
         return Ok(());
     }
 
@@ -59,35 +55,44 @@ pub async fn handle(bot: Bot, msg: Message, query: String) -> ResponseResult<()>
                 .map(|location| {
                     vec![InlineKeyboardButton::callback(
                         format!("{} - {}", location.name, location.country),
-                        location.id.clone(),
+                        location.place_id.clone(),
                     )]
                 })
                 .collect();
 
             let keyboard = InlineKeyboardMarkup::new(buttons);
 
-            bot.send_message(msg.chat.id, "Select a location:")
+            let _ = base::to_error(bot.send_message(msg.chat.id, "Select a location:")
                 .reply_markup(keyboard)
-                .await?;
+                .await)?;
+
+            log::info!("About to change state");
+
+            dialogue.update(State::AwaitingLocationSelection { query }).await.expect("TODO: panic message");
+
+            log::info!("state changed");
         },
         Ok(_) => {
-            bot.send_message(
+            let _ = base::to_error(bot.send_message(
                 msg.chat.id,
                 format!("No locations found for '{}'", query),
-            ).await?;
+            ).await)?;
+
         },
         Err(e) => {
-            bot.send_message(
+            let _ = base::to_error(bot.send_message(
                 msg.chat.id,
                 format!("Error searching for locations: {}", e),
-            ).await?;
+            ).await)?;
         }
     }
 
     Ok(())
 }
 
-pub async fn handle_callback(bot: Bot, cb: CallbackQuery) -> ResponseResult<()> {
+pub async fn handle_callback(bot: Bot, dialogue: MyDialogue, query: String, cb: CallbackQuery) -> HandlerResult {
+    println!("Got callback query: {:?}", cb);
+    log::info!("Got callback query: {:?}", cb);
     if let Some(place_id) = &cb.data {
         // Answer the callback to remove the loading indicator
         bot.answer_callback_query(&cb.id).await?;
@@ -102,21 +107,25 @@ pub async fn handle_callback(bot: Bot, cb: CallbackQuery) -> ResponseResult<()> 
             // Get the forecast
             match get_forecast(place_id).await {
                 Ok(forecast) => {
-                    bot.send_message(
-                        chat_id,
-                        format!("Weather: {}\nCloud cover: {}%",
-                                forecast.forecast,
-                                forecast.clouds),
-                    ).await?;
+
+                        let daily_forecast = format!(
+                            "Daily Forecast: \nSummary for {}: {} \nPrecipitations: {}\nCloud Cover:{}",
+                            forecast.daily.date,
+                            forecast.daily.summary,
+                            forecast.daily.precipitation,
+                            forecast.daily.cloud_cover,
+                       );
+                        let _ = base::to_error(bot.send_message(chat_id, daily_forecast).await)?;
                 },
                 Err(e) => {
-                    bot.send_message(
+                    let _ = base::to_error(bot.send_message(
                         chat_id,
                         format!("Error fetching forecast: {}", e),
-                    ).await?;
+                    ).await)?;
                 }
             }
         }
+        dialogue.exit().await?;
     }
 
     Ok(())
