@@ -29,13 +29,13 @@ async fn search_place(query: &str) -> Result<Vec<Location>, reqwest::Error> {
     Ok(places)
 }
 
-async fn get_forecast(place: &str) ->  Result<WeatherForecast, Box<dyn std::error::Error + Send + Sync>> {
+async fn get_forecast(place: &str) ->  Result<WeatherResponse, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("https://www.meteosource.com/api/v1/free/point?place_id={}&sections=all&timezone=UTC&language=en&units=metric&key={}",
                       place, API_KEY.as_str());
     let resp = reqwest::get(&url).await?;
     let text = resp.text().await?;
     log::info!("Raw Response: {}", text);
-    let forecast: WeatherForecast = serde_json::from_str(&text)?;
+    let forecast: WeatherResponse = serde_json::from_str(&text)?;
     Ok(forecast)
 }
 
@@ -109,11 +109,11 @@ pub async fn handle_callback(bot: Bot, dialogue: MyDialogue, query: String, cb: 
                 Ok(forecast) => {
 
                         let daily_forecast = format!(
-                            "Daily Forecast: \nSummary for {}: {} \nPrecipitations: {}\nCloud Cover:{}",
-                            forecast.daily.date,
-                            forecast.daily.summary,
-                            forecast.daily.precipitation,
-                            forecast.daily.cloud_cover,
+                            "Daily Forecast: It's {} right now. Clouds Cover {}% of the sky.\n\
+                            The sky will be clouded for an average of {}% during the day and the night.",
+                            forecast.current.summary,
+                            forecast.current.cloud_cover,
+                            forecast.daily.data.first().unwrap().all_day.cloud_cover.total,
                        );
                         let _ = base::to_error(bot.send_message(chat_id, daily_forecast).await)?;
                 },
